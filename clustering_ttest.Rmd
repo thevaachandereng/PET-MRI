@@ -1,0 +1,141 @@
+---
+title: "Clustering and t-test"
+output: pdf_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(missMDA)
+library(FactoMineR)
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+```
+
+## T-test for change in Clinical Outcome with p values
+
+$$\% \ change \ in \ outcome = \frac{first \ read  - second \ read}{first \ read}$$
+
+```{r, warning = FALSE}
+data <- read_excel("finaldata.xlsx", sheet = NULL, col_types = c(rep("guess", 6), 
+                                                               "date", rep("guess", 2), 
+                                                               rep("numeric", 10)))
+
+status <- factor(c("low", rep("intermediate", 4), 
+                   "low", "intermediate", "intermediate", 
+                   rep("low", 2), rep("intermediate", 3),
+                   "low", rep("intermediate", 2), rep("low", 2)))
+
+status <- forcats::fct_relevel(status, c("low"))
+
+#smoking <- as.factor(c("low", "high", "low", "high", "high", "low", 
+#                       rep("high", 3), rep("low", 3), "high", "NA", "high", "low"))
+#smoking <- smoking[-c(8, 13, 18:20)]
+
+patient <- 1:18
+
+first_read <- data[seq(1, 54, 3), ]
+second_read <- data[seq(2, 54, 3), ]
+
+pval <- NULL
+for(i in 10:19){
+  change <- 1 - as.numeric(unlist(second_read[, i] / first_read[, i]))
+  cat(names(second_read[, i]), "with p-value of", t.test(change ~ status)$p.value, "\n")
+  pval <- c(pval, t.test(change ~ status)$p.value)
+}
+
+
+```
+
+
+##
+
+```{r}
+change_matrix <- array(NA, c(18, 10))
+
+for(i in 1:10){
+  change_matrix[, i] <- 1 - as.numeric(unlist(second_read[1:18, i + 9] / first_read[1:18, i + 9]))
+}
+
+change_matrix[is.na(change_matrix)] <- 0
+```
+
+```{r pca}
+pca <- PCA(change_matrix)
+
+knitr::kable(cbind(names(data)[10:19], as.numeric(round(pca$var$coord[, 1], 3))))
+```
+
+```{r, kmeans}
+clust <- kmeans(change_matrix, 2, iter.max = 1000, nstart = 1000)
+clust <- kmeans(change_matrix[, 6], 2, iter.max = 1000, nstart = 1000)
+
+dat <- data.frame(risk = status, cluster = factor(clust$cluster), change = change_matrix[, 6], 
+                  patient = patient)
+
+```
+
+
+```{r, fig.width = 5, fig.height = 5}
+ggplot(dat, aes(risk, change, label = patient)) +
+  geom_point(aes(colour = factor(cluster))) +
+  geom_text(aes(label = patient), hjust = 0, vjust = 0) +
+  labs(x = "Risk Groups", y = "Mean change in 10 outcomes") +
+  theme(legend.position=c(0.15, 0.4),
+        strip.background = element_blank())
+
+# Patient with in cluster 1
+dat$patient[dat$cluster == 1]
+
+# Patient in cluster 2
+dat$patient[dat$cluster == 2]
+
+
+```
+
+```{r png}
+pdf("clusterplot.pdf")
+ggplot(dat, aes(risk, change, label = patient)) +
+  geom_point(aes(colour = cluster)) +
+  geom_text(aes(label = patient),hjust=0, vjust=0) +
+  labs(x = "Risk Groups", y = "Mean change in 10 outcomes") +
+  theme(legend.position=c(0.15, 0.4),
+        strip.background = element_blank())
+dev.off()
+```
+
+```{r table, results = "asis"}
+knitr::kable(t(data.frame(Patient = dat$patient, Cluster = dat$cluster)))
+```
+
+
+## Cross validation
+```{r, kmeanscross}
+grouping  <- array(NA, c(18, 10))
+
+meanchange <- apply(change_matrix, 1, function(x){mean(x, na.rm = T)})
+
+for(i in 1:10){
+  clust <- kmeans(change_matrix[, -i], 2, iter.max = 1000, nstart = 1000)
+  dat <- data.frame(risk = status, cluster = factor(clust$cluster), 
+                    change = meanchange, patient = patient)
+  cat("Removing ", names(second_read[i + 9]), "\n")
+  print(ggplot(dat, aes(risk, change, label = patient)) +
+  geom_point(aes(colour = factor(cluster))) +
+  geom_text(aes(label = patient), hjust = 0, vjust = 0) +
+  labs(x = "Risk Groups", y = "Mean change in 10 outcomes") +
+  theme(legend.position=c(0.15, 0.4),
+        strip.background = element_blank()))
+  
+  grouping[, i] <- clust$cluster
+}
+```
+
+## Clustering table after removing each column
+```{r}
+colnames(grouping) <- names(second_read[10:19])
+
+knitr::kable(grouping)
+```
